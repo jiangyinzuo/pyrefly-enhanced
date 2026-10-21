@@ -33,6 +33,7 @@ local function buffer_for(path)
     error('Cannot read source: ' .. path)
   end
   local bufnr = vim.fn.bufadd(path)
+  vim.bo[bufnr].swapfile = false
   -- 不切换窗口；禁用读入自动命令，避免隐式启动新的 LSP。
   vim.cmd('noautocmd call bufload(' .. bufnr .. ')')
   if not api.nvim_buf_is_loaded(bufnr) then
