@@ -274,7 +274,7 @@ def render(matches: list[Match], inferred: dict[str, dict[str, str]]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument('class_name', help='类名或文件内限定名，例如 LLM、Outer.Inner')
+    parser.add_argument('class_names', nargs='+', help='空格分隔的类名或限定名，例如 LLM LLMEngine Outer.Inner')
     parser.add_argument('--root', type=Path, default=Path.cwd(), help='搜索项目，默认当前目录')
     parser.add_argument('--nvim', nargs='?', const='', default=None, metavar='SOCKET',
                         help='复用 Neovim；省略地址时自动发现并选择实例')
@@ -294,12 +294,22 @@ def main() -> int:
                 from nvim_client import NvimClient, choose_address
                 nvim = NvimClient(choose_address(args.nvim), args.timeout)
             extra = [Path(p) for p in nvim.buffers(root)] if nvim else None
-            matches, warnings = find_classes(root, args.class_name,
-                                            nvim.source if nvim else None, extra)
-            if not matches:
+            matches, warnings, missing = [], [], []
+            seen = set()
+            for query in dict.fromkeys(args.class_names):
+                found, notes = find_classes(root, query, nvim.source if nvim else None, extra)
+                warnings.extend(notes)
+                if not found:
+                    missing.append(query)
+                for match in found:
+                    key = (match.path, match.line)
+                    if key not in seen:
+                        seen.add(key)
+                        matches.append(match)
+            if missing:
                 for warning in warnings:
                     print(f'警告：{warning}', file=sys.stderr)
-                print(f'未找到类：{args.class_name}', file=sys.stderr)
+                print('未找到类：' + ', '.join(missing), file=sys.stderr)
                 return 1
             inferred = {}
             client = None

@@ -278,10 +278,13 @@ function M.run(query)
     process:kill(15)
     process = nil
   end
-  local ok, job = pcall(vim.system, {
-    options.python, plugin_root .. '/__main__.py', query,
+  local command = { options.python, plugin_root .. '/__main__.py' }
+  vim.list_extend(command, vim.split(query, '%s+', { trimempty = true }))
+  vim.list_extend(command, {
     '--root', root, '--nvim', socket, '--timeout', tostring(options.timeout),
-  }, { text = true, timeout = (options.timeout + 10) * 1000 }, function(result)
+  })
+  local ok, job = pcall(vim.system, command,
+    { text = true, timeout = (options.timeout + 10) * 1000 }, function(result)
     vim.schedule(function()
       if current ~= sequence then
         return
