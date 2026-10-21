@@ -4,6 +4,7 @@ local options = { python = 'python3', timeout = 60 }
 local plugin_root = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':h:h:h')
 local result_buffer
 local result_tab
+local result_root
 local sequence = 0
 local process
 
@@ -202,7 +203,7 @@ function M.complete(path, line, column, timeout_ms)
   return result
 end
 
-local function display(output)
+local function display(output, root)
   if not result_buffer or not api.nvim_buf_is_valid(result_buffer) then
     result_buffer = api.nvim_create_buf(false, true)
     api.nvim_buf_set_name(result_buffer, 'pyrefly-enhanced://result')
@@ -217,6 +218,7 @@ local function display(output)
   end
   vim.bo[result_buffer].modifiable = true
   api.nvim_buf_set_lines(result_buffer, 0, -1, false, lines)
+  result_root = root
   vim.bo[result_buffer].modified = false
   vim.bo[result_buffer].modifiable = false
   for _, tab in ipairs(api.nvim_list_tabpages()) do
@@ -239,6 +241,10 @@ local function display(output)
 end
 
 local function project_root(bufnr)
+  -- 结果页没有源码 LSP；沿用成功查询的项目，而不是编辑器当前 cwd。
+  if bufnr == result_buffer and result_root then
+    return result_root
+  end
   local best
   local path = api.nvim_buf_get_name(bufnr)
   for _, client in ipairs(vim.lsp.get_clients({ bufnr = bufnr })) do
@@ -298,7 +304,7 @@ function M.run(query)
       if result.stderr and vim.trim(result.stderr) ~= '' then
         vim.notify(vim.trim(result.stderr), vim.log.levels.WARN)
       end
-      display(result.stdout or '')
+      display(result.stdout or '', root)
     end)
   end)
   if not ok then

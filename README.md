@@ -46,7 +46,7 @@ python3 ~/plugged/pyrefly-enhanced LLM > /tmp/LLM.py
 :PyreflyEnhanced LLM LLMEngine EngineCore
 ```
 
-不带类名时使用光标处单词。查询异步执行，结果在新 tab 的 Python scratch buffer 中显示；后续查询复用同一个结果 buffer。命令只使用现有 Pyrefly，不启动新的语言服务器。
+不带类名时使用光标处单词。查询异步执行，结果在新 tab 的 Python scratch buffer 中显示；后续查询复用同一个结果 buffer。在结果页中可直接再次执行命令，沿用上次成功查询的项目，无需切回源码。命令只使用现有 Pyrefly，不启动新的语言服务器。
 
 多个类名用空格分隔，按输入顺序合并输出到同一 stdout／结果 buffer，并共用一次 LSP 会话；重复命中的类只输出一次。任一类未找到时整次查询报错，不用不完整结果覆盖已有结果页。使用自动发现时，把不带地址的 `--nvim` 放在所有类名后面。
 
