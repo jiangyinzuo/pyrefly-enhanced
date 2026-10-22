@@ -83,6 +83,7 @@ python3 ~/plugged/pyrefly-enhanced LLM -all+member:cls
 
 ```python
 # /path/to/project/engine.py:10
+# engine.Engine
 class Engine(Base):
     scheduler: Scheduler
     requests: list[Request]

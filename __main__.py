@@ -253,6 +253,15 @@ def infer_members(client: LspClient, match: Match) -> dict[str, str]:
         client.notify('textDocument/didClose', {'textDocument': {'uri': uri}})
 
 
+def qualified_class_name(match: Match) -> str:
+    parts = [] if match.path.stem == '__init__' else [match.path.stem]
+    parent = match.path.parent
+    while (parent / '__init__.py').is_file() or (parent / '__init__.pyi').is_file():
+        parts.insert(0, parent.name)
+        parent = parent.parent
+    return '.'.join([*parts, match.name])
+
+
 def render(matches: list[Match], inferred: dict[str, dict[str, str]], rules,
            locations: list | None = None) -> str:
     lines = []
@@ -263,8 +272,7 @@ def render(matches: list[Match], inferred: dict[str, dict[str, str]], rules,
                               'column': node.col_offset})
     for match in matches:
         add(f"# {match.path}:{match.line}", match, match.node)
-        if match.name != match.name.rsplit('.', 1)[-1]:
-            add(f"# qualified: {match.name}", match, match.node)
+        add(f"# {qualified_class_name(match)}", match, match.node)
         for decorator in match.node.decorator_list:
             add('@' + ast.unparse(decorator), match, decorator)
         header_node = ast.ClassDef(name=match.node.name, bases=match.node.bases,
