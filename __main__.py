@@ -18,7 +18,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator
-from structure import class_members, extract_rules, included, method_lines, method_scope
+from structure import class_member_lines, extract_rules, included, method_lines, method_scope
 
 
 SKIP_DIRS = {".git", ".hg", ".svn", ".venv", "venv", "env", "__pycache__",
@@ -272,9 +272,7 @@ def render(matches: list[Match], inferred: dict[str, dict[str, str]], rules) -> 
             if not value or value in ('Unknown', 'unknown'):
                 return f"    {name}: Any  # 未能推导类型"
             return f"    {name}: {value}"
-        for name, annotation in class_members(match.node):
-            if included(rules, 'member', name, 'cls'):
-                body.append(member_line(name, annotation))
+        body.extend('    ' + line for line in class_member_lines(match.node, rules))
         for member in match.members:
             if included(rules, 'member', member.name, 'self'):
                 body.append(member_line(member.name, member.annotation))

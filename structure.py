@@ -74,31 +74,41 @@ def method_lines(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
     return (signature + ' ...').splitlines()
 
 
-def class_members(node: ast.ClassDef) -> list[tuple[str, str | None]]:
-    result = {}
-
-    def target_names(target):
-        if isinstance(target, ast.Name):
-            yield target.id
-        elif isinstance(target, (ast.Tuple, ast.List)):
-            for child in target.elts:
-                yield from target_names(child)
+def class_members(node: ast.ClassDef) -> list[ast.Assign | ast.AnnAssign]:
+    result = []
 
     def statements(body):
         for statement in body:
-            if isinstance(statement, ast.AnnAssign):
-                for name in target_names(statement.target):
-                    result[name] = ast.unparse(statement.annotation)
-            elif isinstance(statement, ast.Assign):
-                for target in statement.targets:
-                    for name in target_names(target):
-                        result.setdefault(name, None)
+            if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                result.append(statement)
             elif not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                # 覆盖类体条件分支，不越过方法或嵌套类作用域。
-                for _, value in ast.iter_fields(statement):
-                    if isinstance(value, list):
-                        statements([n for n in value if isinstance(n, ast.stmt)])
-                    elif isinstance(value, ast.ExceptHandler):
-                        statements(value.body)
+                for child in ast.iter_child_nodes(statement):
+                    if isinstance(child, (ast.stmt, ast.ExceptHandler, ast.match_case)):
+                        statements([child] if isinstance(child, ast.stmt) else child.body)
     statements(node.body)
-    return list(result.items())
+    return result
+
+
+def class_member_lines(node: ast.ClassDef, rules: list[Rule]) -> list[str]:
+    lines = []
+    for statement in class_members(node):
+        def selected(target):
+            return [n for n in ast.walk(target) if isinstance(n, ast.Name)
+                    and isinstance(n.ctx, ast.Store) and included(rules, 'member', n.id, 'cls')]
+        if isinstance(statement, ast.AnnAssign):
+            if isinstance(statement.target, ast.Name) and selected(statement.target):
+                lines.extend(ast.unparse(statement).splitlines())
+        else:
+            targets = [copy.deepcopy(t) for t in statement.targets if selected(t)]
+            if not targets:
+                continue
+            # 解包仍保留位置，隐藏字段用 _ 占位；不执行或改写右值表达式。
+            for target in targets:
+                for child in ast.walk(target):
+                    if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                        if not included(rules, 'member', child.id, 'cls'):
+                            child.id = '_'
+            clone = copy.copy(statement)
+            clone.targets = targets
+            lines.extend(ast.unparse(clone).splitlines())
+    return lines

@@ -116,7 +116,11 @@ def test_filtered_class_and_instance_members():
     parsed = ast.parse(render_source(['-all', '+member:self:priv'])).body[0]
     attrs = [n.target.id for n in parsed.body if isinstance(n, ast.AnnAssign)]
     assert attrs == ['_secret']
-    assert class_members(ast.parse(SOURCE).body[0]) == [('shared', 'int'), ('_class_secret', None)]
+    declarations = class_members(ast.parse(SOURCE).body[0])
+    assert isinstance(declarations[0], ast.AnnAssign)
+    assert declarations[0].value.value == 3
+    assert isinstance(declarations[1], ast.Assign)
+    assert declarations[1].value.value == 'secret'
     parsed = ast.parse(render_source(['-all', '+method:pub:cls'])).body[0]
     assert [n.name for n in parsed.body] == ['make', 'worker']
 
@@ -138,3 +142,19 @@ def test_command_completion_matches_all_valid_combinations(tmp_path):
     assert set(data['chained']) == {'-all+method:pub'}
     for token in data['all']:
         extract_rules([token])
+
+
+def test_class_assignments_preserve_values_and_annotations():
+    output = render_source(['-all+member:cls'])
+    node = ast.parse(output).body[0]
+    assert ast.unparse(node.body[0]) == 'shared: int = 3'
+    assert ast.unparse(node.body[1]) == "_class_secret = 'secret'"
+    assert 'value:' not in output
+
+
+def test_unpacking_and_chained_assignments_respect_visibility():
+    from structure import class_member_lines
+    node = ast.parse('class C:\n a, _b = factory()\n x = _y = []\n only_type: str\n').body[0]
+    _, rules = extract_rules(['-all+member:pub:cls'])
+    lines = class_member_lines(node, rules)
+    assert lines == ['a, _ = factory()', 'x = []', 'only_type: str']
