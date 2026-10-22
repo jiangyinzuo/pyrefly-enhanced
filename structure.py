@@ -89,7 +89,7 @@ def class_members(node: ast.ClassDef) -> list[ast.Assign | ast.AnnAssign]:
     return result
 
 
-def class_member_lines(node: ast.ClassDef, rules: list[Rule]) -> list[str]:
+def class_member_lines(node: ast.ClassDef, rules: list[Rule], locations: list | None = None) -> list[str]:
     lines = []
     for statement in class_members(node):
         def selected(target):
@@ -98,6 +98,8 @@ def class_member_lines(node: ast.ClassDef, rules: list[Rule]) -> list[str]:
         if isinstance(statement, ast.AnnAssign):
             if isinstance(statement.target, ast.Name) and selected(statement.target):
                 lines.extend(ast.unparse(statement).splitlines())
+                if locations is not None:
+                    locations.extend([statement] * len(ast.unparse(statement).splitlines()))
         else:
             targets = [copy.deepcopy(t) for t in statement.targets if selected(t)]
             if not targets:
@@ -111,4 +113,6 @@ def class_member_lines(node: ast.ClassDef, rules: list[Rule]) -> list[str]:
             clone = copy.copy(statement)
             clone.targets = targets
             lines.extend(ast.unparse(clone).splitlines())
+            if locations is not None:
+                locations.extend([statement] * len(ast.unparse(clone).splitlines()))
     return lines

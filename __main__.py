@@ -253,35 +253,52 @@ def infer_members(client: LspClient, match: Match) -> dict[str, str]:
         client.notify('textDocument/didClose', {'textDocument': {'uri': uri}})
 
 
-def render(matches: list[Match], inferred: dict[str, dict[str, str]], rules) -> str:
+def render(matches: list[Match], inferred: dict[str, dict[str, str]], rules,
+           locations: list | None = None) -> str:
     lines = []
+    def add(text, match, node):
+        lines.append(text)
+        if locations is not None:
+            locations.append({'file': str(match.path), 'line': node.lineno,
+                              'column': node.col_offset})
     for match in matches:
-        lines.append(f"# {match.path}:{match.line}")
+        add(f"# {match.path}:{match.line}", match, match.node)
         if match.name != match.name.rsplit('.', 1)[-1]:
-            lines.append(f"# qualified: {match.name}")
-        lines.extend('@' + ast.unparse(d) for d in match.node.decorator_list)
+            add(f"# qualified: {match.name}", match, match.node)
+        for decorator in match.node.decorator_list:
+            add('@' + ast.unparse(decorator), match, decorator)
         header_node = ast.ClassDef(name=match.node.name, bases=match.node.bases,
                                    keywords=match.node.keywords, body=[ast.Pass()], decorator_list=[])
         if hasattr(match.node, 'type_params'):
             header_node.type_params = match.node.type_params
-        lines.append(ast.unparse(ast.fix_missing_locations(header_node)).splitlines()[0])
+        add(ast.unparse(ast.fix_missing_locations(header_node)).splitlines()[0], match, match.node)
         types = inferred.get(str(match.path) + ':' + match.name, {})
-        body = []
         def member_line(name, annotation):
             value = types.get(name) or annotation
             if not value or value in ('Unknown', 'unknown'):
                 return f"    {name}: Any  # 未能推导类型"
             return f"    {name}: {value}"
-        body.extend('    ' + line for line in class_member_lines(match.node, rules))
+        member_locations = []
+        for text, node in zip(class_member_lines(match.node, rules, member_locations), member_locations):
+            add('    ' + text, match, node)
         for member in match.members:
             if included(rules, 'member', member.name, 'self'):
-                body.append(member_line(member.name, member.annotation))
+                source_line = match.source.splitlines()[member.line - 1]
+                byte_column = len(source_line.encode('utf-16-le')[:member.column * 2].decode('utf-16-le').encode())
+                add(member_line(member.name, member.annotation), match,
+                    ast.Pass(lineno=member.line, col_offset=byte_column))
         for method in match.node.body:
             if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and included(
                     rules, 'method', method.name, method_scope(method)):
-                body.extend('    ' + line for line in method_lines(method))
-        lines.extend(body or ['    ...'])
+                decorators = method.decorator_list
+                for index, text in enumerate(method_lines(method)):
+                    node = decorators[index] if index < len(decorators) else method
+                    add('    ' + text, match, node)
+        if lines[-1].startswith('class '):
+            add('    ...', match, match.node)
         lines.append('')
+        if locations is not None:
+            locations.append(None)
     return '\n'.join(lines)
 
 
@@ -293,6 +310,7 @@ def main() -> int:
     parser.add_argument('--nvim', nargs='?', const='', default=None, metavar='SOCKET',
                         help='复用 Neovim；省略地址时自动发现并选择实例')
     parser.add_argument('--timeout', type=float, default=60, help='类型查询超时秒数，默认 60')
+    parser.add_argument('--editor-json', action='store_true', help=argparse.SUPPRESS)
     try:
         argv, rules = extract_rules(sys.argv[1:])
     except ValueError as exc:
@@ -338,7 +356,12 @@ def main() -> int:
             for match in matches:
                 types = nvim.infer(match) if nvim else infer_members(client, match)
                 inferred[str(match.path) + ':' + match.name] = types
-            print(render(matches, inferred, rules))
+            locations = []
+            output = render(matches, inferred, rules, locations)
+            if args.editor_json:
+                print(json.dumps({'output': output, 'locations': locations}, ensure_ascii=False))
+            else:
+                print(output)
             for warning in warnings:
                 print(f'警告：{warning}', file=sys.stderr)
             return 0

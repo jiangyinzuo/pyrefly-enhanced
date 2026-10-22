@@ -5,6 +5,7 @@ local plugin_root = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':h:
 local result_buffer
 local result_tab
 local result_root
+local result_locations = {}
 local sequence = 0
 local process
 
@@ -203,7 +204,19 @@ function M.complete(path, line, column, timeout_ms)
   return result
 end
 
-local function display(output, root)
+function M.definition()
+  local location = result_locations[api.nvim_win_get_cursor(0)[1]]
+  if not location or location == vim.NIL then
+    vim.notify('No source definition on this line', vim.log.levels.INFO)
+    return
+  end
+  vim.cmd("normal! m'")
+  local bufnr = buffer_for(location.file)
+  api.nvim_win_set_buf(0, bufnr)
+  api.nvim_win_set_cursor(0, { location.line, location.column })
+end
+
+local function display(output, root, locations)
   if not result_buffer or not api.nvim_buf_is_valid(result_buffer) then
     result_buffer = api.nvim_create_buf(false, true)
     api.nvim_buf_set_name(result_buffer, 'pyrefly-enhanced://result')
@@ -211,6 +224,8 @@ local function display(output, root)
     vim.bo[result_buffer].bufhidden = 'hide'
     vim.bo[result_buffer].swapfile = false
     vim.bo[result_buffer].filetype = 'python'
+    vim.keymap.set('n', '<leader>gd', M.definition,
+      { buffer = result_buffer, silent = true, desc = 'Go to original Python declaration' })
   end
   local lines = vim.split(output, '\n', { plain = true })
   if lines[#lines] == '' then
@@ -219,6 +234,7 @@ local function display(output, root)
   vim.bo[result_buffer].modifiable = true
   api.nvim_buf_set_lines(result_buffer, 0, -1, false, lines)
   result_root = root
+  result_locations = locations
   vim.bo[result_buffer].modified = false
   vim.bo[result_buffer].modifiable = false
   for _, tab in ipairs(api.nvim_list_tabpages()) do
@@ -287,7 +303,7 @@ function M.run(query)
   local command = { options.python, plugin_root .. '/__main__.py' }
   vim.list_extend(command, vim.split(query, '%s+', { trimempty = true }))
   vim.list_extend(command, {
-    '--root', root, '--nvim', socket, '--timeout', tostring(options.timeout),
+    '--root', root, '--nvim', socket, '--timeout', tostring(options.timeout), '--editor-json',
   })
   local ok, job = pcall(vim.system, command,
     { text = true, timeout = (options.timeout + 10) * 1000 }, function(result)
@@ -304,7 +320,12 @@ function M.run(query)
       if result.stderr and vim.trim(result.stderr) ~= '' then
         vim.notify(vim.trim(result.stderr), vim.log.levels.WARN)
       end
-      display(result.stdout or '', root)
+      local ok_decode, payload = pcall(vim.json.decode, result.stdout or '')
+      if not ok_decode then
+        vim.notify('Invalid inspection response: ' .. tostring(payload), vim.log.levels.ERROR)
+        return
+      end
+      display(payload.output, root, payload.locations)
     end)
   end)
   if not ok then
