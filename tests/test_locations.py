@@ -23,12 +23,14 @@ class Demo:
     lines = output.split('\n')
     assert len(lines) == len(locations)
     expected = {'@decorate': 1, 'class Demo:': 2, '    shared = []': 3,
-                '    def __init__(self): ...': 4, '    @classmethod': 6,
+                '    def __init__(self):': 4, '    @classmethod': 6,
                 '    def create(cls): ...': 7}
     for text, line in expected.items():
         assert locations[lines.index(text)]['line'] == line
-    member_index = next(i for i, line in enumerate(lines) if 'value: ' in line)
+    member_index = next(i for i, line in enumerate(lines) if 'self.value = ' in line)
     location = locations[member_index]
     assert location['line'] == 5
-    assert source.splitlines()[4].encode()[location['column']:].decode().startswith('value')
+    span = next(s for s in location['spans'] if s['kind'] == 'assignment' and
+                lines[member_index].encode()[s['start']:s['end']].decode() == 'value')
+    assert source.splitlines()[4].encode()[span['column']:].decode().startswith('value')
     assert locations[-1] is None

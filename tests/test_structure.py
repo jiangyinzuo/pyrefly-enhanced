@@ -106,15 +106,18 @@ def test_decorators_signatures_and_compact_bodies():
     assert isinstance(next(m for m in methods if m.name == 'worker'), ast.AsyncFunctionDef)
     assert [ast.unparse(m.decorator_list[0]) for m in methods if m.name == 'prop'] == ['property', 'prop.setter']
     for m in methods:
-        assert len(m.body) == 1 and m.body[0].value.value is Ellipsis
-    assert all(line.endswith(': ...') for line in output.splitlines() if line.lstrip().startswith(('def ', 'async def ')))
+        if m.name != '__init__':
+            assert len(m.body) == 1 and m.body[0].value.value is Ellipsis
+    assert all(line.endswith(': ...') for line in output.splitlines()
+               if line.lstrip().startswith(('def ', 'async def ')) and 'def __init__(' not in line)
     assert '\n\n    def ' not in output
     assert 'body excluded' not in output
 
 
 def test_filtered_class_and_instance_members():
     parsed = ast.parse(render_source(['-all', '+member:self:priv'])).body[0]
-    attrs = [n.target.id for n in parsed.body if isinstance(n, ast.AnnAssign)]
+    init = next(n for n in parsed.body if isinstance(n, ast.FunctionDef) and n.name == '__init__')
+    attrs = [n.targets[0].attr for n in init.body if isinstance(n, ast.Assign)]
     assert attrs == ['_secret']
     declarations = class_members(ast.parse(SOURCE).body[0])
     assert isinstance(declarations[0], ast.AnnAssign)

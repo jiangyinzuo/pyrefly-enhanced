@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from structure import class_member_lines, extract_rules, included, method_lines, method_scope
+from initializer import initializer_lines
 
 
 SKIP_DIRS = {".git", ".hg", ".svn", ".venv", "venv", "env", "__pycache__",
@@ -281,26 +282,27 @@ def render(matches: list[Match], inferred: dict[str, dict[str, str]], rules,
             header_node.type_params = match.node.type_params
         add(ast.unparse(ast.fix_missing_locations(header_node)).splitlines()[0], match, match.node)
         types = inferred.get(str(match.path) + ':' + match.name, {})
-        def member_line(name, annotation):
-            value = types.get(name) or annotation
-            if not value or value in ('Unknown', 'unknown'):
-                return f"    {name}: Any  # 未能推导类型"
-            return f"    {name}: {value}"
         member_locations = []
         for text, node in zip(class_member_lines(match.node, rules, member_locations), member_locations):
             add('    ' + text, match, node)
-        for member in match.members:
-            if included(rules, 'member', member.name, 'self'):
-                source_line = match.source.splitlines()[member.line - 1]
-                byte_column = len(source_line.encode('utf-16-le')[:member.column * 2].decode('utf-16-le').encode())
-                add(member_line(member.name, member.annotation), match,
-                    ast.Pass(lineno=member.line, col_offset=byte_column))
         for method in match.node.body:
-            if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and included(
-                    rules, 'method', method.name, method_scope(method)):
-                decorators = method.decorator_list
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            visible = included(rules, 'method', method.name, method_scope(method))
+            if method.name == '__init__':
+                has_members = any(included(rules, 'member', m.name, 'self') for m in match.members)
+                if visible or has_members:
+                    for text, location in initializer_lines(method, types, rules):
+                        lines.append('    ' + text)
+                        if locations is not None:
+                            location = dict(location, file=str(match.path))
+                            if 'spans' in location:
+                                location['spans'] = [dict(s, start=s['start'] + 4, end=s['end'] + 4)
+                                                     for s in location['spans']]
+                            locations.append(location)
+            elif visible:
                 for index, text in enumerate(method_lines(method)):
-                    node = decorators[index] if index < len(decorators) else method
+                    node = method.decorator_list[index] if index < len(method.decorator_list) else method
                     add('    ' + text, match, node)
         if lines[-1].startswith('class '):
             add('    ...', match, match.node)

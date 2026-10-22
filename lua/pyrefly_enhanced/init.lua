@@ -205,15 +205,77 @@ function M.complete(path, line, column, timeout_ms)
 end
 
 function M.definition()
-  local location = result_locations[api.nvim_win_get_cursor(0)[1]]
+  local cursor = api.nvim_win_get_cursor(0)
+  local location = result_locations[cursor[1]]
   if not location or location == vim.NIL then
     vim.notify('No source definition on this line', vim.log.levels.INFO)
     return
   end
-  vim.cmd("normal! m'")
+  local span
+  if location.spans and location.spans ~= vim.NIL then
+    for _, candidate in ipairs(location.spans) do
+      if cursor[2] >= candidate.start and cursor[2] < candidate['end'] then
+        span = candidate
+        break
+      end
+    end
+    if not span then
+      vim.notify('No source definition under cursor', vim.log.levels.INFO)
+      return
+    end
+  end
   local bufnr = buffer_for(location.file)
+  if span and span.kind == 'definition' then
+    local client = select_client(bufnr)
+    if not client:supports_method('textDocument/definition', bufnr) then
+      error('Pyrefly does not support definition for ' .. location.file)
+    end
+    local line = span.line - 1
+    local text = api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1]
+    local delta = cursor[2] - span.start
+    if span.source_length and span.source_length ~= vim.NIL then
+      delta = math.min(delta, math.max(0, span.source_length - 1))
+    end
+    local byte = math.min(span.column + delta, #text)
+    local encoding = client.offset_encoding or 'utf-16'
+    local character = vim.str_utfindex(text, encoding, byte, true)
+    local response, err = client:request_sync('textDocument/definition', {
+      textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+      position = { line = line, character = character },
+    }, options.timeout * 1000, bufnr)
+    if not response then
+      error('Pyrefly definition failed: ' .. tostring(err))
+    end
+    if response.err then
+      error('Pyrefly definition: ' .. (response.err.message or vim.inspect(response.err)))
+    end
+    local locations = response.result
+    if not locations or locations == vim.NIL then
+      vim.notify('No source definition found', vim.log.levels.INFO)
+      return
+    end
+    if locations.uri or locations.targetUri then
+      locations = { locations }
+    end
+    if #locations == 0 then
+      vim.notify('No source definition found', vim.log.levels.INFO)
+    elseif #locations == 1 then
+      vim.lsp.util.show_document(locations[1], encoding, { focus = true, reuse_win = true })
+    else
+      vim.fn.setqflist({}, ' ', {
+        title = 'Pyrefly definitions',
+        items = vim.lsp.util.locations_to_items(locations, encoding),
+      })
+      vim.cmd('copen')
+    end
+    return
+  end
+  vim.cmd("normal! m'")
   api.nvim_win_set_buf(0, bufnr)
-  api.nvim_win_set_cursor(0, { location.line, location.column })
+  api.nvim_win_set_cursor(0, {
+    span and span.line or location.line,
+    span and span.column or location.column,
+  })
 end
 
 local function display(output, root, locations)
