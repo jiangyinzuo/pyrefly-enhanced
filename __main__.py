@@ -18,6 +18,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from structure import class_members, extract_rules, included, method_lines, method_scope
 
 
 SKIP_DIRS = {".git", ".hg", ".svn", ".venv", "venv", "env", "__pycache__",
@@ -40,6 +41,7 @@ class Match:
     bases: list[str]
     members: list[Member]
     source: str
+    node: ast.ClassDef
 
 
 def init_members(node: ast.ClassDef, source: str) -> list[Member]:
@@ -120,7 +122,7 @@ def find_classes(root: Path, query: str, source_reader: Callable[[Path], str] | 
                 if query == node.name or query == name:
                     bases = [ast.unparse(base) for base in node.bases]
                     matches.append(Match(path, name, node.lineno, bases,
-                                         init_members(node, source), source))
+                                         init_members(node, source), source, node))
                 self.scope.append(node.name)
                 self.generic_visit(node)
                 self.scope.pop()
@@ -251,35 +253,53 @@ def infer_members(client: LspClient, match: Match) -> dict[str, str]:
         client.notify('textDocument/didClose', {'textDocument': {'uri': uri}})
 
 
-def render(matches: list[Match], inferred: dict[str, dict[str, str]]) -> str:
+def render(matches: list[Match], inferred: dict[str, dict[str, str]], rules) -> str:
     lines = []
     for match in matches:
         lines.append(f"# {match.path}:{match.line}")
         if match.name != match.name.rsplit('.', 1)[-1]:
             lines.append(f"# qualified: {match.name}")
-        name = match.name.rsplit('.', 1)[-1]
-        bases = ', '.join(match.bases or ['object'])
-        lines.append(f"class {name}({bases}):")
-        if not match.members:
-            lines.append('    pass  # 本类 __init__ 中未发现直接赋值的实例成员')
+        lines.extend('@' + ast.unparse(d) for d in match.node.decorator_list)
+        header_node = ast.ClassDef(name=match.node.name, bases=match.node.bases,
+                                   keywords=match.node.keywords, body=[ast.Pass()], decorator_list=[])
+        if hasattr(match.node, 'type_params'):
+            header_node.type_params = match.node.type_params
+        lines.append(ast.unparse(ast.fix_missing_locations(header_node)).splitlines()[0])
+        types = inferred.get(str(match.path) + ':' + match.name, {})
+        body = []
+        def member_line(name, annotation):
+            value = types.get(name) or annotation
+            if not value or value in ('Unknown', 'unknown'):
+                return f"    {name}: Any  # 未能推导类型"
+            return f"    {name}: {value}"
+        for name, annotation in class_members(match.node):
+            if included(rules, 'member', name, 'cls'):
+                body.append(member_line(name, annotation))
         for member in match.members:
-            annotation = inferred.get(str(match.path) + ':' + match.name, {}).get(member.name) or member.annotation
-            if not annotation or annotation in ('Unknown', 'unknown'):
-                lines.append(f"    {member.name}: Any  # 未能推导类型")
-            else:
-                lines.append(f"    {member.name}: {annotation}")
+            if included(rules, 'member', member.name, 'self'):
+                body.append(member_line(member.name, member.annotation))
+        for method in match.node.body:
+            if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and included(
+                    rules, 'method', method.name, method_scope(method)):
+                body.extend('    ' + line for line in method_lines(method))
+        lines.extend(body or ['    ...'])
         lines.append('')
     return '\n'.join(lines)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False,
+        epilog='输出规则：+all（默认）、-all、±method、±member；可加 :pub/:priv/:self/:cls。按从左到右覆盖，支持 -all+method:pub 连写。')
     parser.add_argument('class_names', nargs='+', help='空格分隔的类名或限定名，例如 LLM LLMEngine Outer.Inner')
     parser.add_argument('--root', type=Path, default=Path.cwd(), help='搜索项目，默认当前目录')
     parser.add_argument('--nvim', nargs='?', const='', default=None, metavar='SOCKET',
                         help='复用 Neovim；省略地址时自动发现并选择实例')
     parser.add_argument('--timeout', type=float, default=60, help='类型查询超时秒数，默认 60')
-    args = parser.parse_args()
+    try:
+        argv, rules = extract_rules(sys.argv[1:])
+    except ValueError as exc:
+        parser.error(str(exc))
+    args = parser.parse_args(argv)
     if args.timeout <= 0:
         parser.error('--timeout 必须大于 0')
     if not shutil.which('rg'):
@@ -320,7 +340,7 @@ def main() -> int:
             for match in matches:
                 types = nvim.infer(match) if nvim else infer_members(client, match)
                 inferred[str(match.path) + ':' + match.name] = types
-            print(render(matches, inferred))
+            print(render(matches, inferred, rules))
             for warning in warnings:
                 print(f'警告：{warning}', file=sys.stderr)
             return 0

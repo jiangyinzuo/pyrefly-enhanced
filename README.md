@@ -58,6 +58,25 @@ require('pyrefly_enhanced').setup({ python = 'python3', timeout = 60 })
 
 不要在 Neovim 中用同步 shell 调用等待 `--nvim` 客户端完成：客户端还需要向这个 Neovim 发 RPC，容易互相等待。插件命令已经采用异步启动。
 
+## 选择输出内容
+
+默认 `+all`，输出本类成员和方法；规则按书写顺序应用，最右侧匹配规则优先，支持连写：
+
+```bash
+python3 ~/plugged/pyrefly-enhanced LLM +all-member
+python3 ~/plugged/pyrefly-enhanced LLM -all +method:pub:self
+python3 ~/plugged/pyrefly-enhanced LLM -all+member:cls
+```
+
+```vim
+:PyreflyEnhanced LLM +all-member
+:PyreflyEnhanced LLM -all +member:priv:self
+```
+
+`+` 输出、`-` 隐藏；`method` 指方法，`member` 指属性，`all` 同时覆盖两者。`method/member` 可追加 `:pub`、`:priv`、`:self`、`:cls`；多个条件取交集，两种次序均可。`pub` 名称不以下划线开头；`priv` 包含单下划线、双下划线及 `__init__` 等特殊名称。`self` 包含实例属性和普通实例方法/property，`cls` 包含类体属性及 classmethod/staticmethod。无符号的规则不接受；`all` 不接受限定条件。
+
+例如 `-member+member` 恢复全部属性，`-member+all` 恢复全部内容，`+all-member` 只输出方法。Neovim 在规则类别和每个冒号后逐项补全，不一次插入多项限定，也不提供冲突条件。
+
 ## 输出与边界
 
 ```python
@@ -66,11 +85,14 @@ class Engine(Base):
     scheduler: Scheduler
     requests: list[Request]
     dynamic_value: Any  # 未能推导类型
+    def __init__(self): ...
+    @classmethod
+    def create(cls) -> 'Engine': ...
 ```
 
 这是结构摘要，不是可独立运行的类实现；不会自动导入父类或类型。同名类全部输出，嵌套类额外注释限定名。类型优先用 LSP 补全，缺少时使用源码显式注解，再无信息用 `Any` 并标明未知。
 
-只读取本类 `__init__` 的直接属性赋值，支持条件、循环、解包和非 self 命名的接收参数。排除嵌套函数/类，不展开继承构造函数或其他方法，不解析 `setattr` 和运行时动态注入。父类保留源码表达式，不展开 MRO。
+成员包含本类 `__init__` 的实例属性以及类体属性；支持条件、循环、解包和非 self 命名的接收参数。所有本类直接定义的方法保留源码装饰器和签名，包括 async、property setter、overload，方法体统一为同行 `: ...`，方法之间不插空行。类装饰器始终输出。排除嵌套函数/类，不展开继承构造函数、继承方法或其他方法动态新增的属性，不解析 `setattr` 和运行时注入。注解和默认值按源码重建，格式由 AST 规范化，不保留原排版；方法签名不额外推导未声明的注解。父类保留源码表达式，不展开 MRO。
 
 ripgrep 先筛 `class 类名` 声明，再用 AST 核对；搜索包括 gitignore 忽略的源码，但跳过隐藏目录、常见虚拟环境、缓存和符号链接。Neovim 模式同时检查已加载的项目缓冲区，并基于未保存内容查询，避免 AST 与 LSP 使用不同版本。源码以 noautocmd 加载，不切窗口、不修改用户文本，也不通过 FileType 自动启动新服务器。
 
